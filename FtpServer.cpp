@@ -48,6 +48,34 @@
 
 #include <FtpServer.h>
 
+template <size_t N>
+class StringPrintBuffer : public Print {
+  public:
+    virtual size_t write(const uint8_t *buffer, size_t size) override {
+      if (_size + size < N) {
+        memcpy(_buf + _size, buffer, size);
+        _size += size;
+        return size;
+      } else {
+        return 0;
+      }
+    }
+    virtual size_t write(uint8_t c) override {
+      if (_size < N) {
+        _buf[_size++] = c;
+        return 1;
+      } else {
+        return 0;
+      }
+    }
+
+    const char* buffer() { return reinterpret_cast<const char*>(_buf); };
+    const size_t size() { return _size; };
+  private:
+    size_t _size = 0;
+    uint8_t _buf[N] = {0};
+};
+
 FtpServer::FtpServer( uint16_t _cmdPort, uint16_t _pasvPort )
          : ftpServer( _cmdPort ), dataServer( _pasvPort )
 {
@@ -282,10 +310,13 @@ uint8_t FtpServer::handleFTP() {
 
 void FtpServer::clientConnected()
 {
+
 	DEBUG_PRINTLN( F(" Client connected!") );
-  client.print(F("220---")); client.print(welcomeMessage); client.println(F(" ---"));
-  client.println(F("220---   By Renzo Mischianti   ---"));
-  client.print(F("220 --    Version ")); client.print(FTP_SERVER_VERSION); client.println(F("    --"));
+  StringPrintBuffer<256> response;
+  response.print(F("220---")); response.print(welcomeMessage); response.println(F(" ---"));
+  response.println(F("220---   By Renzo Mischianti   ---"));
+  response.print(F("220 --    Version ")); response.print(FTP_SERVER_VERSION); response.println(F("    --"));
+  client.write(response.buffer(), response.size());
   iCL = 0;
   if (FtpServer::_callback) {
 	  FtpServer::_callback(FTP_CONNECT, free(), capacity());
@@ -313,6 +344,8 @@ void FtpServer::disconnectClient()
 
 bool FtpServer::processCommand()
 {
+  StringPrintBuffer<512> response;
+
   ///////////////////////////////////////
   //                                   //
   //      AUTHENTICATION COMMANDS      //
@@ -336,17 +369,17 @@ bool FtpServer::processCommand()
 	if (this->anonymousConnection &&  ! strcmp( parameter, user )) {
     	DEBUG_PRINTLN( F(" Anonymous authentication Ok. Waiting for commands.") );
 
-      client.println(F("230 Ok") );
+      response.println(F("230 Ok") );
       cmdStage = FTP_Cmd;
 	} else if( ! strcmp( parameter, user ))
     {
-      client.println(F("331 Ok. Password required") );
+      response.println(F("331 Ok. Password required") );
       strcpy( cwdName, "/" );
       cmdStage = FTP_Pass;
     }
     else
     {
-      client.println(F("530 ") );
+      response.println(F("530 ") );
       cmdStage = FTP_Stop;
     }
   }
@@ -357,19 +390,19 @@ bool FtpServer::processCommand()
   {
     if( cmdStage != FTP_Pass )
     {
-      client.println(F("503 ") );
+      response.println(F("503 ") );
       cmdStage = FTP_Stop;
     }
     if( ! strcmp( parameter, pass ))
     {
     	DEBUG_PRINTLN( F(" Authentication Ok. Waiting for commands.") );
 
-      client.println(F("230 Ok") );
+      response.println(F("230 Ok") );
       cmdStage = FTP_Cmd;
     }
     else
     {
-    	client.println( F("530 ") );
+    	response.println( F("530 ") );
       cmdStage = FTP_Stop;
     }
   }
@@ -378,29 +411,29 @@ bool FtpServer::processCommand()
   //
   else if( CommandIs( "FEAT" ))
   {
-    client.println(F("211-Extensions suported:"));
-    client.println(F(" MLST type*;modify*;size*;") );
-    client.println(F(" MLSD") );
-    client.println(F(" MDTM") );
-    client.println(F(" MFMT") );
+    response.println(F("211-Extensions suported:"));
+    response.println(F(" MLST type*;modify*;size*;") );
+    response.println(F(" MLSD") );
+    response.println(F(" MDTM") );
+    response.println(F(" MFMT") );
 #ifdef UTF8_SUPPORT
-	client.println(F(" UTF8") );
+	response.println(F(" UTF8") );
 #endif
-    client.println(F(" SIZE") );
-    client.println(F(" SITE FREE") );
-    client.println(F("211 End.") );
+    response.println(F(" SIZE") );
+    response.println(F(" SITE FREE") );
+    response.println(F("211 End.") );
   }
   //
   //  AUTH - Not implemented
   //
   else if( CommandIs( "AUTH" ))
-    client.println(F("502 ") );
+    response.println(F("502 ") );
   //
   //  Unrecognized commands at stage of authentication
   //
   else if( cmdStage < FTP_Cmd )
   {
-    client.println(F("530 ") );
+    response.println(F("530 ") );
     cmdStage = FTP_Stop;
   }
 
@@ -415,7 +448,7 @@ bool FtpServer::processCommand()
   //
   else if( CommandIs( "PWD" ) ||
            ( CommandIs( "CWD" ) && ParameterIs( "." ))) {
-	  client.print( F("257 \"")); client.print( cwdName ); client.print( F("\"") ); client.println( F(" is your current directory") );
+	  response.print( F("257 \"")); response.print( cwdName ); response.print( F("\"") ); response.println( F(" is your current directory") );
   //
   //  CDUP - Change to Parent Directory 
   //
@@ -444,7 +477,7 @@ bool FtpServer::processCommand()
     if( ! ok ) {
       strcpy( cwdName, "/" );
     }
-    client.print( F("250 Ok. Current directory is ") ); client.println( cwdName );
+    response.print( F("250 Ok. Current directory is ") ); response.println( cwdName );
   }
   //
   //  CWD - Change Working Directory
@@ -455,7 +488,7 @@ bool FtpServer::processCommand()
     if( haveParameter() && makeExistsPath( path ))
     {
       strcpy( cwdName, path );
-      client.print( F("250 Directory changed to ") ); client.print(cwdName); client.println();
+      response.print( F("250 Directory changed to ") ); response.print(cwdName); response.println();
     }
   }
   //
@@ -463,7 +496,7 @@ bool FtpServer::processCommand()
   //
   else if( CommandIs( "QUIT" ))
   {
-    client.println(F("221 Goodbye") );
+    response.println(F("221 Goodbye") );
     disconnectClient();
     cmdStage = FTP_Stop;
   }
@@ -480,9 +513,9 @@ bool FtpServer::processCommand()
   else if( CommandIs( "MODE" ))
   {
     if( ParameterIs( "S" )) {
-      client.println(F("200 S Ok") );
+      response.println(F("200 S Ok") );
     } else {
-      client.println(F("504 Only S(tream) is suported") );
+      response.println(F("504 Only S(tream) is suported") );
     }
   }
   //
@@ -505,10 +538,10 @@ bool FtpServer::processCommand()
     DEBUG_PRINT( int( dataIp[2]) ); DEBUG_PRINT( F(".") ); DEBUG_PRINT( int( dataIp[3]) );
     DEBUG_PRINT( F(":") ); DEBUG_PRINTLN( dataPort );
 
-    client.print( F("227 Entering Passive Mode") ); client.print( F(" (") );
-    client.print( int( dataIp[0]) ); client.print( F(",") ); client.print( int( dataIp[1]) ); client.print( F(",") );
-    client.print( int( dataIp[2]) ); client.print( F(",") ); client.print( int( dataIp[3]) ); client.print( F(",") );
-    client.print( ( dataPort >> 8 ) ); client.print( F(",") ); client.print( ( dataPort & 255 ) ); client.println( F(")") );
+    response.print( F("227 Entering Passive Mode") ); response.print( F(" (") );
+    response.print( int( dataIp[0]) ); response.print( F(",") ); response.print( int( dataIp[1]) ); response.print( F(",") );
+    response.print( int( dataIp[2]) ); response.print( F(",") ); response.print( int( dataIp[3]) ); response.print( F(",") );
+    response.print( ( dataPort >> 8 ) ); response.print( F(",") ); response.print( ( dataPort & 255 ) ); response.println( F(")") );
     dataConn = FTP_Pasive;
   }
   //
@@ -530,14 +563,14 @@ bool FtpServer::processCommand()
     p = strchr( p, ',' );
     dataPort += atoi( ++ p );
     if( p == NULL ) {
-      client.println(F("501 Can't interpret parameters") );
+      response.println(F("501 Can't interpret parameters") );
     } else
     {
     	DEBUG_PRINT( F(" Data IP set to ") ); DEBUG_PRINT( int( dataIp[0]) ); DEBUG_PRINT( F(".") ); DEBUG_PRINT( int( dataIp[1]) );
     	DEBUG_PRINT( F(".") ); DEBUG_PRINT( int( dataIp[2]) ); DEBUG_PRINT( F(".") ); DEBUG_PRINTLN( int( dataIp[3]) );
     	DEBUG_PRINT( F(" Data port set to ") ); DEBUG_PRINTLN( dataPort );
 
-      client.println(F("200 PORT command successful") );
+      response.println(F("200 PORT command successful") );
       dataConn = FTP_Active;
     }
   }
@@ -547,11 +580,11 @@ bool FtpServer::processCommand()
   else if( CommandIs( "STRU" ))
   {
     if( ParameterIs( "F" )) {
-      client.println(F("200 F Ok") );
+      response.println(F("200 F Ok") );
     // else if( ParameterIs( "R" ))
-    //  client.println(F("200 B Ok") );
+    //  response.println(F("200 B Ok") );
     }else{
-      client.println(F("504 Only F(ile) is suported") );
+      response.println(F("504 Only F(ile) is suported") );
     }
   }
   //
@@ -560,11 +593,11 @@ bool FtpServer::processCommand()
   else if( CommandIs( "TYPE" ))
   {
     if( ParameterIs( "A" )) {
-      client.println(F("200 TYPE is now ASCII"));
+      response.println(F("200 TYPE is now ASCII"));
     } else if( ParameterIs( "I" )) {
-      client.println(F("200 TYPE is now 8-bit binary") );
+      response.println(F("200 TYPE is now 8-bit binary") );
     } else {
-      client.println(F("504 Unknow TYPE") );
+      response.println(F("504 Unknow TYPE") );
     }
   }
 
@@ -580,7 +613,7 @@ bool FtpServer::processCommand()
   else if( CommandIs( "ABOR" ))
   {
     abortTransfer();
-    client.println(F("226 Data connection closed"));
+    response.println(F("226 Data connection closed"));
   }
   //
   //  DELE - Delete a File 
@@ -594,9 +627,9 @@ bool FtpServer::processCommand()
     		  FtpServer::_callback(FTP_FREE_SPACE_CHANGE, free(), capacity());
     	  }
 
-        client.print( F("250 Deleted ") ); client.println( parameter );
+        response.print( F("250 Deleted ") ); response.println( parameter );
       } else {
-    	  client.print( F("450 Can't delete ") ); client.println( parameter );
+    	  response.print( F("450 Can't delete ") ); response.println( parameter );
       }
     }
   }
@@ -639,23 +672,23 @@ bool FtpServer::processCommand()
     bool isdir;
     if( haveParameter() && makeExistsPath( path )){
       if( ! getFileModTime( path, & dat, & tim )) {
-        client.print( F("550 Unable to retrieve time for ") ); client.println( parameter );
+        response.print( F("550 Unable to retrieve time for ") ); response.println( parameter );
       } else
       {
         isdir = isDir( path );
-        client.println( F("250-Begin") );
-        client.print( F(" Type=") ); client.print( ( isdir ? F("dir") : F("file")) );
-        client.print( F(";Modify=") ); client.print( makeDateTimeStr( dtStr, dat, tim ) );
+        response.println( F("250-Begin") );
+        response.print( F(" Type=") ); response.print( ( isdir ? F("dir") : F("file")) );
+        response.print( F(";Modify=") ); response.print( makeDateTimeStr( dtStr, dat, tim ) );
         if( ! isdir )
         {
           if( openFile( path, FTP_FILE_READ ))
           {
-            client.print( F(";Size=") ); client.print( long( fileSize( file )) );
+            response.print( F(";Size=") ); response.print( long( fileSize( file )) );
             file.close();
           }
         }
-        client.print( F("; ") ); client.println( path );
-        client.println( F("250 End.") );
+        response.print( F("; ") ); response.println( path );
+        response.println( F("250 End.") );
       }
     }
   }
@@ -663,7 +696,7 @@ bool FtpServer::processCommand()
   //  NOOP
   //
   else if( CommandIs( "NOOP" )) {
-    client.println(F("200 Zzz...") );
+    response.println(F("200 Zzz...") );
   }
   //
 #ifdef UTF8_SUPPORT
@@ -671,10 +704,10 @@ bool FtpServer::processCommand()
   //
   else if( CommandIs( "OPTS" )) {
     if( ParameterIs( "UTF8 ON" ) || ParameterIs( "utf8 on" )) {
-      client.println(F("200 OK, UTF8 ON") );
+      response.println(F("200 OK, UTF8 ON") );
       DEBUG_PRINTLN(F("200 OK, UTF8 ON") );
     } else {
-      client.println(F("504 Unknow OPTS") );
+      response.println(F("504 Unknow OPTS") );
       DEBUG_PRINTLN(F("504 Unknow OPTS") );
     }
   }
@@ -683,18 +716,18 @@ bool FtpServer::processCommand()
   //  HELP
   //
   else if( CommandIs( "HELP" )) {
-    client.println(F("200 Commands implemented:") );
-	client.println(F("      USER, PASS, AUTH (AUTH only return 'not implemented' code)") );
-	client.println(F("      CDUP, CWD, PWD, QUIT, NOOP") );
-	client.println(F("      MODE, PASV, PORT, STRU, TYPE") );
-	client.println(F("      ABOR, DELE, LIST, NLST, MLST, MLSD") );
-	client.println(F("      APPE, RETR, STOR") );
-	client.println(F("      MKD,  RMD") );
-	client.println(F("      RNTO, RNFR") );
-	client.println(F("      MDTM, MFMT") );
-	client.println(F("      FEAT, SIZE") );
-	client.println(F("      SITE FREE") );
-	client.println(F("      HELP") );
+    response.println(F("200 Commands implemented:") );
+	response.println(F("      USER, PASS, AUTH (AUTH only return 'not implemented' code)") );
+	response.println(F("      CDUP, CWD, PWD, QUIT, NOOP") );
+	response.println(F("      MODE, PASV, PORT, STRU, TYPE") );
+	response.println(F("      ABOR, DELE, LIST, NLST, MLST, MLSD") );
+	response.println(F("      APPE, RETR, STOR") );
+	response.println(F("      MKD,  RMD") );
+	response.println(F("      RNTO, RNFR") );
+	response.println(F("      MDTM, MFMT") );
+	response.println(F("      FEAT, SIZE") );
+	response.println(F("      SITE FREE") );
+	response.println(F("      HELP") );
   }
   //
   //  RETR - Retrieve
@@ -704,7 +737,7 @@ bool FtpServer::processCommand()
     char path[ FTP_CWD_SIZE ];
     if( haveParameter() && makeExistsPath( path )) {
       if( ! openFile( path, FTP_FILE_READ )) {
-        client.print( F("450 Can't open ") ); client.print( parameter );
+        response.print( F("450 Can't open ") ); response.print( parameter );
       } else if( dataConnect( false ))
       {
     	  DEBUG_PRINT( F(" Sending ") ); DEBUG_PRINT( parameter ); DEBUG_PRINT( F(" size ") ); DEBUG_PRINTLN( long( fileSize( file ))  );
@@ -714,8 +747,8 @@ bool FtpServer::processCommand()
 		  }
 
 
-        client.print( F("150-Connected to port ") ); client.println( dataPort );
-        client.print( F("150 ") ); client.print( long( fileSize( file )) ); client.println( F(" bytes to download") );
+        response.print( F("150-Connected to port ") ); response.println( dataPort );
+        response.print( F("150 ") ); response.print( long( fileSize( file )) ); response.println( F(" bytes to download") );
         millisBeginTrans = millis();
         bytesTransfered = 0;
         transferStage = FTP_Retrieve;
@@ -746,7 +779,7 @@ bool FtpServer::processCommand()
       DEBUG_PRINT(F("open/create "));
       DEBUG_PRINTLN(open);
       if( ! open ){
-    	  client.print( F("451 Can't open/create ") ); client.println( parameter );
+    	  response.print( F("451 Can't open/create ") ); response.println( parameter );
       }else if( ! dataConnect()) // && !data.available())
         file.close();
       else
@@ -774,17 +807,17 @@ bool FtpServer::processCommand()
     if( haveParameter() && makePath( path ))
     {
       if( exists( path )) {
-    	  client.print( F("521 \"") ); client.print( parameter ); client.println( F("\" directory already exists") );
+    	  response.print( F("521 \"") ); response.print( parameter ); response.println( F("\" directory already exists") );
       } else
       {
     	  DEBUG_PRINT( F(" Creating directory ")); DEBUG_PRINTLN( parameter );
 
 #if STORAGE_TYPE != STORAGE_SPIFFS
         if( makeDir( path )) {
-        	client.print( F("257 \"") ); client.print( parameter ); client.print( F("\"") ); client.println( F(" created") );
+        	response.print( F("257 \"") ); response.print( parameter ); response.print( F("\"") ); response.println( F(" created") );
         } else {
 #endif
-        	client.print( F("550 Can't create \"") ); client.print( parameter ); client.println( F("\"") );
+        	response.print( F("550 Can't create \"") ); response.print( parameter ); response.println( F("\"") );
 #if STORAGE_TYPE != STORAGE_SPIFFS
         }
 #endif
@@ -802,10 +835,10 @@ bool FtpServer::processCommand()
       {
     	  DEBUG_PRINT( F(" Deleting ") ); DEBUG_PRINTLN( path );
 
-    	  client.print( F("250 \"") ); client.print( parameter ); client.println( F("\" deleted") );
+    	  response.print( F("250 \"") ); response.print( parameter ); response.println( F("\" deleted") );
       }
       else {
-    	  client.print( F("550 Can't remove \"") ); client.print( parameter ); client.println( F("\". Directory not empty?") );
+    	  response.print( F("550 Can't remove \"") ); response.print( parameter ); response.println( F("\". Directory not empty?") );
       }
     }
   }
@@ -819,7 +852,7 @@ bool FtpServer::processCommand()
     {
     	DEBUG_PRINT( F(" Ready for renaming ") ); DEBUG_PRINTLN( rnfrName );
 
-      client.println(F("350 RNFR accepted - file exists, ready for destination") );
+      response.println(F("350 RNFR accepted - file exists, ready for destination") );
       rnfrCmd = true;
     }
   }
@@ -831,11 +864,11 @@ bool FtpServer::processCommand()
     char path[ FTP_CWD_SIZE ];
     char dirp[ FTP_FIL_SIZE ];
     if( strlen( rnfrName ) == 0 || ! rnfrCmd ) {
-      client.println(F("503 Need RNFR before RNTO") );
+      response.println(F("503 Need RNFR before RNTO") );
     } else if( haveParameter() && makePath( path ))
     {
       if( exists( path )) {
-        client.print( F("553 ") ); client.print( parameter ); client.println( F(" already exists") );
+        response.print( F("553 ") ); response.print( parameter ); response.println( F(" already exists") );
       } else
       {
         strcpy( dirp, path );
@@ -848,19 +881,19 @@ bool FtpServer::processCommand()
           * psep = 0;
 //          fail = ! isDir( dirp );
 //          if( fail ) {
-//        	  client.print( F("550 \"") ); client.print( dirp ); client.println( F("\" is not directory") );
+//        	  response.print( F("550 \"") ); response.print( dirp ); response.println( F("\" is not directory") );
 //          } else
 //          {
         	  DEBUG_PRINT( F(" Renaming ") ); DEBUG_PRINT( rnfrName ); DEBUG_PRINT( F(" to ") ); DEBUG_PRINTLN( path );
 
             if( rename( rnfrName, path ))
-              client.println(F("250 File successfully renamed or moved") );
+              response.println(F("250 File successfully renamed or moved") );
             else
               fail = true;
 //          }
         }
         if( fail )
-          client.println(F("451 Rename/move failure") );
+          response.println(F("451 Rename/move failure") );
       }
     }
     rnfrCmd = false;
@@ -897,14 +930,14 @@ bool FtpServer::processCommand()
       // fname point to file name
       fname += setTime;
       if( strlen( fname ) <= 0 ) {
-        client.println(F("501 No file name") );
+        response.println(F("501 No file name") );
       } else if( makeExistsPath( path, fname )) {
         if( setTime ) // set file modification time
         {
           if( timeStamp( path, year, month, day, hour, minute, second )) {
-            client.print( F("213 ") ); client.println( dt );
+            response.print( F("213 ") ); response.println( dt );
           } else {
-            client.println(F("550 Unable to modify time" ));
+            response.println(F("550 Unable to modify time" ));
           }
         }
         else if( mdtm ) // get file modification time
@@ -912,9 +945,9 @@ bool FtpServer::processCommand()
           uint16_t dat, tim;
           char dtStr[ 15 ];
           if( getFileModTime( path, & dat, & tim )) {
-            client.print( F("213 ") ); client.println( makeDateTimeStr( dtStr, dat, tim ) );
+            response.print( F("213 ") ); response.println( makeDateTimeStr( dtStr, dat, tim ) );
           } else {
-            client.println("550 Unable to retrieve time" );
+            response.println("550 Unable to retrieve time" );
           }
         }
       }
@@ -928,10 +961,10 @@ bool FtpServer::processCommand()
     char path[ FTP_CWD_SIZE ];
     if( haveParameter() && makeExistsPath( path )) {
       if( ! openFile( path, FTP_FILE_READ )) {
-        client.print( F("450 Can't open ") ); client.println( parameter );
+        response.print( F("450 Can't open ") ); response.println( parameter );
       } else
       {
-        client.print( F("213 ") ); client.println( long( fileSize( file )) );
+        response.print( F("213 ") ); response.println( long( fileSize( file )) );
         file.close();
       }
     }
@@ -945,27 +978,33 @@ bool FtpServer::processCommand()
     {
       uint32_t capa = capacity();
       if(( capa >> 10 ) < 1000 ) { // less than 1 Giga
-        client.print( F("200 ") ); client.print( free() ); client.print( F(" kB free of ") );
-        client.print( capa ); client.println( F(" kB capacity") );
+        response.print( F("200 ") ); response.print( free() ); response.print( F(" kB free of ") );
+        response.print( capa ); response.println( F(" kB capacity") );
       }else {
-    	  client.print( F("200 ") ); client.print( ( free() >> 10 ) ); client.print( F(" MB free of ") );
-    	  client.print( ( capa >> 10 ) ); client.println( F(" MB capacity") );
+    	  response.print( F("200 ") ); response.print( ( free() >> 10 ) ); response.print( F(" MB free of ") );
+    	  response.print( ( capa >> 10 ) ); response.println( F(" MB capacity") );
       }
     }
     else {
-    	client.print( F("500 Unknow SITE command ") ); client.println( parameter );
+    	response.print( F("500 Unknow SITE command ") ); response.println( parameter );
     }
   }
   //
   //  Unrecognized commands ...
   //
   else
-    client.println(F("500 Unknow command") );
+    response.println(F("500 Unknow command") );
+
+  client.write(response.buffer(), response.size());
+  client.flush();
+
   return true;
 }
 
 int FtpServer::dataConnect( bool out150 )
 {
+  StringPrintBuffer<256> response;
+
   if( ! data.connected()) {
     if( dataConn == FTP_Pasive )
     {
@@ -995,10 +1034,11 @@ int FtpServer::dataConnect( bool out150 )
 //#else
 //	  if( ! ( data.connected() )) {
 //#endif
-    client.println(F("425 No data connection"));
+    response.println(F("425 No data connection"));
   } else if( out150 ) {
-    client.print( F("150 Accepted data connection to port ") ); client.println( dataPort );
+    response.print( F("150 Accepted data connection to port ") ); response.println( dataPort );
   }
+  client.write(response.buffer(), response.size());
 //#ifdef ESP8266
 	  return  data.connected() || data.available();
 //#else
@@ -1175,15 +1215,16 @@ bool FtpServer::doStore()
 }
 
 void generateFileLine(FTP_CLIENT_NETWORK_CLASS* data, bool isDirectory, const char* fn, long fz, const char* time, const char* user, bool writeFilename = true) {
+	StringPrintBuffer<512> response;
 	if( isDirectory ) {
 		//			  data.print( F("+/,\t") );
 		//			  DEBUG_PRINT(F("+/,\t"));
 
-		data->print( F("drwxrwsr-x\t2\t"));
-		data->print( user );
-		data->print( F("\t") );
-		data->print( long( 4096 ) );
-		data->print( F("\t") );
+		response.print( F("drwxrwsr-x\t2\t"));
+		response.print( user );
+		response.print( F("\t") );
+		response.print( long( 4096 ) );
+		response.print( F("\t") );
 
 		DEBUG_PRINT( F("drwxrwsr-x\t2\t") );
 		DEBUG_PRINT( user );
@@ -1192,24 +1233,24 @@ void generateFileLine(FTP_CLIENT_NETWORK_CLASS* data, bool isDirectory, const ch
 		DEBUG_PRINT( long( 4096 ) );
 		DEBUG_PRINT( F("\t") );
 
-		data->print(time);
+		response.print(time);
 		DEBUG_PRINT(time);
 
-		data->print( F("\t") );
-		if (writeFilename) data->println( fn );
+		response.print( F("\t") );
+		if (writeFilename) response.println( fn );
 
 		DEBUG_PRINT( F("\t") );
 		if (writeFilename) DEBUG_PRINTLN( fn );
 
 	} else {
-//			data.print( F("+r,s") );
+//			response.print( F("+r,s") );
 //			DEBUG_PRINT(F("+r,s"));
 
-		data->print( F("-rw-rw-r--\t1\t") );
-		data->print( user );
-		data->print( F("\t") );
-		data->print( fz );
-		data->print( F("\t") );
+		response.print( F("-rw-rw-r--\t1\t") );
+		response.print( user );
+		response.print( F("\t") );
+		response.print( fz );
+		response.print( F("\t") );
 
 		DEBUG_PRINT( F("-rw-rw-r--\t1\t") );
 		DEBUG_PRINT( user );
@@ -1217,16 +1258,16 @@ void generateFileLine(FTP_CLIENT_NETWORK_CLASS* data, bool isDirectory, const ch
 		DEBUG_PRINT( fz );
 		DEBUG_PRINT( F("\t") );
 
-		data->print(time);
+		response.print(time);
 		DEBUG_PRINT(time);
 
-		data->print( F("\t") );
-		if (writeFilename) data->println( fn );
+		response.print( F("\t") );
+		if (writeFilename) response.println( fn );
 
 		DEBUG_PRINT( F("\t") );
 		if (writeFilename) DEBUG_PRINTLN( fn );
 	}
-
+	data->write(response.buffer(), response.size());
 }
 
 #if defined(ESP32) || defined(ESP8266)
@@ -1682,8 +1723,10 @@ bool FtpServer::doMlsd()
     return gfmt;
   }
 #endif
-  client.println(F("226-options: -a -l") );
-  client.print( F("226 ") ); client.print( nbMatch ); client.println( F(" matches total") );
+  StringPrintBuffer<64> response;
+  response.println(F("226-options: -a -l") );
+  response.print( F("226 ") ); response.print( nbMatch ); response.println( F(" matches total") );
+  client.write(response.buffer(), response.size());
 #if STORAGE_TYPE != STORAGE_SPIFFS && STORAGE_TYPE != STORAGE_LITTLEFS && STORAGE_TYPE != STORAGE_SEEED_SD && STORAGE_TYPE != STORAGE_SEEED_SD
     dir.close();
 #endif
@@ -1705,9 +1748,11 @@ void FtpServer::closeTransfer()
 	  }
 
 
-    client.println(F("226-File successfully transferred") );
-    client.print( F("226 ") ); client.print( deltaT ); client.print( F(" ms, ") );
-    client.print( bytesTransfered / deltaT ); client.println( F(" kbytes/s") );
+    StringPrintBuffer<64> response;
+    response.println(F("226-File successfully transferred") );
+    response.print( F("226 ") ); response.print( deltaT ); response.print( F(" ms, ") );
+    response.print( bytesTransfered / deltaT ); response.println( F(" kbytes/s") );
+    client.write(response.buffer(), response.size());
   }
   else
     client.println(F("226 File successfully transferred") );
@@ -1917,7 +1962,9 @@ bool FtpServer::makeExistsPath( char * path, char * param )
     return true;
   }
   DEBUG_PRINTLN(" ...NOT EXIST!")
-  client.print(F("550 ")); client.print( path ); client.println( F(" not found.") );
+  StringPrintBuffer<64> response;
+  response.print(F("550 ")); response.print( path ); response.println( F(" not found.") );
+  client.write(response.buffer(), response.size());
   return false;
 }
 
